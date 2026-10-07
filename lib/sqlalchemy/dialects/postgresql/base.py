@@ -2443,33 +2443,37 @@ class PGCompiler(compiler.SQLCompiler):
             return None
 
     def for_update_clause(self, select, **kw):
-        if select._for_update_arg.read:
-            if select._for_update_arg.key_share:
-                tmp = " FOR KEY SHARE"
+        parts = []
+        for arg in select._for_update_args:
+            if arg.read:
+                if arg.key_share:
+                    tmp = " FOR KEY SHARE"
+                else:
+                    tmp = " FOR SHARE"
+            elif arg.key_share:
+                tmp = " FOR NO KEY UPDATE"
             else:
-                tmp = " FOR SHARE"
-        elif select._for_update_arg.key_share:
-            tmp = " FOR NO KEY UPDATE"
-        else:
-            tmp = " FOR UPDATE"
+                tmp = " FOR UPDATE"
 
-        if select._for_update_arg.of:
-            tables = util.OrderedSet()
-            for c in select._for_update_arg.of:
-                tables.update(sql_util.surface_selectables_only(c))
+            if arg.of:
+                tables = util.OrderedSet()
+                for c in arg.of:
+                    tables.update(sql_util.surface_selectables_only(c))
 
-            of_kw = dict(kw)
-            of_kw.update(ashint=True, use_schema=False)
-            tmp += " OF " + ", ".join(
-                self.process(table, **of_kw) for table in tables
-            )
+                of_kw = dict(kw)
+                of_kw.update(ashint=True, use_schema=False)
+                tmp += " OF " + ", ".join(
+                    self.process(table, **of_kw) for table in tables
+                )
 
-        if select._for_update_arg.nowait:
-            tmp += " NOWAIT"
-        if select._for_update_arg.skip_locked:
-            tmp += " SKIP LOCKED"
+            if arg.nowait:
+                tmp += " NOWAIT"
+            if arg.skip_locked:
+                tmp += " SKIP LOCKED"
 
-        return tmp
+            parts.append(tmp)
+
+        return "".join(parts)
 
     def visit_substring_func(self, func, **kw):
         s = self.process(func.clauses.clauses[0], **kw)

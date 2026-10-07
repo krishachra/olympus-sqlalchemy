@@ -1623,14 +1623,29 @@ class OracleCompiler(compiler.SQLCompiler):
                 select._oracle_visit = True
 
                 # add expressions to accommodate FOR UPDATE OF
-                for_update = select._for_update_arg
-                if for_update is not None and for_update.of:
-                    for_update = for_update._clone()
-                    for_update._copy_internals()
-
-                    for elem in for_update.of:
-                        if not select.selected_columns.contains_column(elem):
-                            select = select.add_columns(elem)
+                # (clone args that have .of so we can mutate their .of lists
+                # when rewriting them through the inner subquery alias)
+                for_update_args = select._for_update_args
+                of_args = [
+                    arg for arg in for_update_args if arg.of
+                ]
+                if of_args:
+                    cloned_of_args = [
+                        arg._clone() for arg in of_args
+                    ]
+                    for ca in cloned_of_args:
+                        ca._copy_internals()
+                    for ca in cloned_of_args:
+                        for elem in ca.of:
+                            if not select.selected_columns.contains_column(elem):
+                                select = select.add_columns(elem)
+                    # rebuild the full args tuple with cloned copies
+                    for_update_args = tuple(
+                        cloned_of_args.pop(0)
+                        if (arg.of and cloned_of_args)
+                        else arg
+                        for arg in for_update_args
+                    )
 
                 # Wrap the middle select and add the hint
                 inner_subquery = select.alias()
@@ -1659,11 +1674,19 @@ class OracleCompiler(compiler.SQLCompiler):
                 limitselect._is_wrapper = True
 
                 # add expressions to accommodate FOR UPDATE OF
-                if for_update is not None and for_update.of:
-                    adapter = sql_util.ClauseAdapter(inner_subquery)
-                    for_update.of = [
-                        adapter.traverse(elem) for elem in for_update.of
-                    ]
+                adapter = sql_util.ClauseAdapter(inner_subquery)
+                new_args = []
+                for arg in for_update_args:
+                    if arg.of:
+                        cloned = arg._clone()
+                        cloned._copy_internals()
+                        cloned.of = [
+                            adapter.traverse(elem) for elem in cloned.of
+                        ]
+                        new_args.append(cloned)
+                    else:
+                        new_args.append(arg)
+                for_update_args = tuple(new_args)
 
                 # If needed, add the limiting clause
                 if limit_clause is not None:
@@ -1687,7 +1710,7 @@ class OracleCompiler(compiler.SQLCompiler):
 
                 # If needed, add the ora_rn, and wrap again with offset.
                 if offset_clause is None:
-                    limitselect._for_update_arg = for_update
+                    limitselect._for_update_args = for_update_args
                     select = limitselect
                 else:
                     limitselect = limitselect.add_columns(
@@ -1696,14 +1719,15 @@ class OracleCompiler(compiler.SQLCompiler):
                     limitselect._oracle_visit = True
                     limitselect._is_wrapper = True
 
-                    if for_update is not None and for_update.of:
-                        limitselect_cols = limitselect.selected_columns
-                        for elem in for_update.of:
-                            if (
-                                limitselect_cols.corresponding_column(elem)
-                                is None
-                            ):
-                                limitselect = limitselect.add_columns(elem)
+                    for arg in for_update_args:
+                        if arg.of:
+                            limitselect_cols = limitselect.selected_columns
+                            for elem in arg.of:
+                                if (
+                                    limitselect_cols.corresponding_column(elem)
+                                    is None
+                                ):
+                                    limitselect = limitselect.add_columns(elem)
 
                     limit_subquery = limitselect.alias()
                     origselect_cols = orig_select.selected_columns
@@ -1719,17 +1743,25 @@ class OracleCompiler(compiler.SQLCompiler):
                     offsetselect._oracle_visit = True
                     offsetselect._is_wrapper = True
 
-                    if for_update is not None and for_update.of:
-                        adapter = sql_util.ClauseAdapter(limit_subquery)
-                        for_update.of = [
-                            adapter.traverse(elem) for elem in for_update.of
-                        ]
+                    adapter2 = sql_util.ClauseAdapter(limit_subquery)
+                    new_args2 = []
+                    for arg in for_update_args:
+                        if arg.of:
+                            cloned = arg._clone()
+                            cloned._copy_internals()
+                            cloned.of = [
+                                adapter2.traverse(elem) for elem in cloned.of
+                            ]
+                            new_args2.append(cloned)
+                        else:
+                            new_args2.append(arg)
+                    for_update_args = tuple(new_args2)
 
                     offsetselect = offsetselect.where(
                         sql.literal_column("ora_rn") > offset_clause
                     )
 
-                    offsetselect._for_update_arg = for_update
+                    offsetselect._for_update_args = for_update_args
                     select = offsetselect
 
         return select
@@ -1744,19 +1776,23 @@ class OracleCompiler(compiler.SQLCompiler):
         if self.is_subquery():
             return ""
 
-        tmp = " FOR UPDATE"
+        parts = []
+        for arg in select._for_update_args:
+            tmp = " FOR UPDATE"
 
-        if select._for_update_arg.of:
-            tmp += " OF " + ", ".join(
-                self.process(elem, **kw) for elem in select._for_update_arg.of
-            )
+            if arg.of:
+                tmp += " OF " + ", ".join(
+                    self.process(elem, **kw) for elem in arg.of
+                )
 
-        if select._for_update_arg.nowait:
-            tmp += " NOWAIT"
-        if select._for_update_arg.skip_locked:
-            tmp += " SKIP LOCKED"
+            if arg.nowait:
+                tmp += " NOWAIT"
+            if arg.skip_locked:
+                tmp += " SKIP LOCKED"
 
-        return tmp
+            parts.append(tmp)
+
+        return "".join(parts)
 
     def visit_is_distinct_from_binary(self, binary, operator, **kw):
         return "DECODE(%s, %s, 0, 1) = 1" % (

@@ -1747,8 +1747,10 @@ class MySQLCompiler(
     def for_update_clause(
         self, select: selectable.GenerativeSelect, **kw: Any
     ) -> str:
-        assert select._for_update_arg is not None
-        if select._for_update_arg.read:
+        assert select._for_update_args
+        # MySQL does not support multiple locking clauses; use the first one.
+        arg = select._for_update_args[0]
+        if arg.read:
             if self.dialect.use_mysql_for_share:
                 tmp = " FOR SHARE"
             else:
@@ -1756,9 +1758,9 @@ class MySQLCompiler(
         else:
             tmp = " FOR UPDATE"
 
-        if select._for_update_arg.of and self.dialect.supports_for_update_of:
+        if arg.of and self.dialect.supports_for_update_of:
             tables: util.OrderedSet[elements.ClauseElement] = util.OrderedSet()
-            for c in select._for_update_arg.of:
+            for c in arg.of:
                 tables.update(sql_util.surface_selectables_only(c))
 
             tmp += " OF " + ", ".join(
@@ -1766,10 +1768,10 @@ class MySQLCompiler(
                 for table in tables
             )
 
-        if select._for_update_arg.nowait:
+        if arg.nowait:
             tmp += " NOWAIT"
 
-        if select._for_update_arg.skip_locked:
+        if arg.skip_locked:
             tmp += " SKIP LOCKED"
 
         return tmp

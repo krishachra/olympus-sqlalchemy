@@ -5426,7 +5426,7 @@ class SQLCompiler(Compiled):
         if select._has_row_limiting_clause:
             text += self._row_limit_clause(select, **kwargs)
 
-        if select._for_update_arg is not None:
+        if select._for_update_args:
             text += self.for_update_clause(select, **kwargs)
 
         return text
@@ -5540,7 +5540,7 @@ class SQLCompiler(Compiled):
             return ""
 
     def for_update_clause(self, select, **kw):
-        return " FOR UPDATE"
+        return "".join(" FOR UPDATE" for _ in select._for_update_args)
 
     def returning_clause(
         self,

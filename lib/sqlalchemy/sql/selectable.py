@@ -4115,7 +4115,7 @@ class GenerativeSelect(DialectKWArgs, SelectBase, Generative):
     _offset_clause: Optional[ColumnElement[Any]] = None
     _fetch_clause: Optional[ColumnElement[Any]] = None
     _fetch_clause_options: Optional[Dict[str, bool]] = None
-    _for_update_arg: Optional[ForUpdateArg] = None
+    _for_update_args: Tuple[ForUpdateArg, ...] = ()
 
     def __init__(self, _label_style: SelectLabelStyle = LABEL_STYLE_DEFAULT):
         self._label_style = _label_style
@@ -4179,12 +4179,79 @@ class GenerativeSelect(DialectKWArgs, SelectBase, Generative):
          on the PostgreSQL dialect.
 
         """
-        self._for_update_arg = ForUpdateArg(
-            nowait=nowait,
-            read=read,
-            of=of,
-            skip_locked=skip_locked,
-            key_share=key_share,
+        self._for_update_args = (
+            ForUpdateArg(
+                nowait=nowait,
+                read=read,
+                of=of,
+                skip_locked=skip_locked,
+                key_share=key_share,
+            ),
+        )
+        return self
+
+    @_generative
+    def add_for_update(
+        self,
+        *,
+        nowait: bool = False,
+        read: bool = False,
+        of: Optional[_ForUpdateOfArgument] = None,
+        skip_locked: bool = False,
+        key_share: bool = False,
+    ) -> Self:
+        """Append an additional ``FOR UPDATE`` or ``FOR SHARE`` locking clause
+        to this :class:`_expression.GenerativeSelect`.
+
+        While :meth:`_expression.GenerativeSelect.with_for_update` replaces
+        any existing locking clause, this method appends a new locking clause
+        to the statement, enabling multiple locking specifications in a single
+        query.  This is supported by PostgreSQL, which allows multiple
+        ``FOR UPDATE`` / ``FOR SHARE`` clauses with different ``OF`` targets
+        and different locking strengths in the same ``SELECT`` statement.
+
+        E.g.::
+
+            stmt = (
+                select(table_a, table_b)
+                .with_for_update(of=table_a)
+                .add_for_update(read=True, of=table_b)
+            )
+
+        On PostgreSQL the above renders as:
+
+        .. sourcecode:: sql
+
+            SELECT a.id, b.id FROM a JOIN b ON a.b_id = b.id
+            FOR UPDATE OF a
+            FOR SHARE OF b
+
+        :param nowait: boolean; will render ``FOR UPDATE NOWAIT`` on Oracle
+         Database and PostgreSQL dialects.
+
+        :param read: boolean; will render ``FOR SHARE`` on PostgreSQL.
+
+        :param of: SQL expression or list of SQL expression elements which
+         will render into a ``FOR UPDATE OF`` / ``FOR SHARE OF`` clause.
+
+        :param skip_locked: boolean, will render ``SKIP LOCKED`` on
+         Oracle Database and PostgreSQL dialects.
+
+        :param key_share: boolean, will render ``FOR NO KEY UPDATE``,
+         or if combined with ``read=True`` will render ``FOR KEY SHARE``,
+         on the PostgreSQL dialect.
+
+        .. versionadded:: 2.1
+
+        """
+        self._for_update_args = self._for_update_args + (
+            ForUpdateArg(
+                nowait=nowait,
+                read=read,
+                of=of,
+                skip_locked=skip_locked,
+                key_share=key_share,
+            ),
         )
         return self
 
@@ -4672,7 +4739,7 @@ class CompoundSelect(
             ("_fetch_clause_options", InternalTraversal.dp_plain_dict),
             ("_order_by_clauses", InternalTraversal.dp_clauseelement_list),
             ("_group_by_clauses", InternalTraversal.dp_clauseelement_list),
-            ("_for_update_arg", InternalTraversal.dp_clauseelement),
+            ("_for_update_args", InternalTraversal.dp_clauseelement_tuple),
             ("keyword", InternalTraversal.dp_string),
         ]
         + SupportsCloneAnnotations._clone_annotations_traverse_internals
@@ -5571,7 +5638,7 @@ class Select(
             ("_offset_clause", InternalTraversal.dp_clauseelement),
             ("_fetch_clause", InternalTraversal.dp_clauseelement),
             ("_fetch_clause_options", InternalTraversal.dp_plain_dict),
-            ("_for_update_arg", InternalTraversal.dp_clauseelement),
+            ("_for_update_args", InternalTraversal.dp_clauseelement_tuple),
             ("_distinct", InternalTraversal.dp_boolean),
             ("_distinct_on", InternalTraversal.dp_clauseelement_tuple),
             ("_label_style", InternalTraversal.dp_plain_obj),
